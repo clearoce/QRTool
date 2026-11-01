@@ -103,9 +103,22 @@ namespace QRTool
             if (command == "print")
             {
                 if (args.Length < 3)
-                    throw new ArgumentException("用法：QRTool.exe print <text> <printer>");
+                    throw new ArgumentException(
+                        "用法：QRTool.exe print <text> <printer> [out.pdf]");
                 BuiltLabel built = Tspl.Build(args[1], cfg);
-                PrinterService.SendRaw(args[2], built.Data, "QRTool QR Label");
+                if (PrinterService.IsVirtualPrinter(args[2]))
+                {
+                    string outputPath = args.Length > 3 ? args[3] : null;
+                    using (Bitmap image = QrPreview.Render(built, cfg))
+                    {
+                        PrinterService.PrintRendered(
+                            args[2], image, built.Layout, outputPath);
+                    }
+                }
+                else
+                {
+                    PrinterService.SendRaw(args[2], built.Data, "QRTool QR Label");
+                }
                 return 0;
             }
 

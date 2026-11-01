@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Printing;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace QRTool
@@ -61,6 +64,58 @@ namespace QRTool
             catch (Exception)
             {
                 return "";
+            }
+        }
+
+        public static bool IsVirtualPrinter(string printerName)
+        {
+            if (string.IsNullOrEmpty(printerName)) return false;
+            string name = printerName.ToLowerInvariant();
+            return name.Contains("print to pdf") ||
+                   name.Contains("adobe pdf") ||
+                   name.Contains("microsoft xps") ||
+                   name.Contains("onenote") ||
+                   name.Contains("cutepdf") ||
+                   name.Contains("fax");
+        }
+
+        public static void PrintRendered(
+            string printerName, Bitmap label, LabelLayout layout, string outputPath)
+        {
+            if (string.IsNullOrEmpty(printerName))
+                throw new ArgumentException("未选择打印机");
+            if (label == null || layout == null)
+                throw new ArgumentException("没有可打印的标签图像");
+
+            using (PrintDocument document = new PrintDocument())
+            {
+                document.PrinterSettings.PrinterName = printerName;
+                document.DocumentName = "QRTool QR Label";
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string fullPath = Path.GetFullPath(outputPath);
+                    string dir = Path.GetDirectoryName(fullPath);
+                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                    document.PrinterSettings.PrintToFile = true;
+                    document.PrinterSettings.PrintFileName = fullPath;
+                }
+
+                document.PrintPage += delegate(object sender, PrintPageEventArgs e)
+                {
+                    float width = layout.WidthDots * 100f / layout.Dpi;
+                    float height = layout.HeightDots * 100f / layout.Dpi;
+                    float x = e.MarginBounds.Left + (e.MarginBounds.Width - width) / 2f;
+                    float y = e.MarginBounds.Top + (e.MarginBounds.Height - height) / 2f;
+                    if (x < 0) x = 0;
+                    if (y < 0) y = 0;
+
+                    e.Graphics.PageUnit = GraphicsUnit.Display;
+                    e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                    e.Graphics.DrawImage(label, x, y, width, height);
+                    e.HasMorePages = false;
+                };
+                document.Print();
             }
         }
 

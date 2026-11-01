@@ -9,7 +9,7 @@ Windows 桌面小工具：输入文本 → 本地预览二维码 → 以 **TSPL 
 这个工具功能不复杂，之前用 PySide6/Qt 时 exe 本体约 55 MB，绝大部分是 Qt 运行时。现在改成：
 
 - **C# WinForms + .NET Framework 4.8**：Windows 10/11 自带运行时，目标机不需要装 Python、.NET SDK 或额外依赖。
-- **单文件 exe，约 249 KB**：QRCoder.dll 以资源方式内嵌，最终只交付一个 exe。
+- **单文件 exe，约 252 KB**：QRCoder.dll 以资源方式内嵌，最终只交付一个 exe。
 - **启动快**：不是 PyInstaller onefile，不需要每次解压到临时目录。
 
 ## 环境要求
@@ -29,15 +29,18 @@ dist\QRTool.exe
 - exe 未做代码签名，SmartScreen/Defender 可能提示；选择“仍要运行”即可。
 - 这是窗口程序；命令行调试可用下面的 headless 入口。
 
+> **虚拟打印机自动兼容**：Microsoft Print to PDF / XPS / OneNote / Fax 会自动改用 GDI 图片渲染，生成有效的 PDF/图片；GP-9134T 仍走 TSPL RAW。虚拟打印机输出的是栅格图，不是 TSPL，页面使用驱动默认大小（如 A4），标签按实际物理尺寸居中。
+
 ## 界面功能
 
 1. **文本内容**：支持中文、引号、多行；实时显示字节数/容量上限。
 2. **打印机**：枚举 Windows 打印队列；「刷新」重新枚举；「测试」发送固定内容 `QRTool TEST` 的测试标签（强制 1 份）。
 3. **标签与二维码**：标签宽/高/间距（mm）、DPI、份数、ECC、单元宽度（自动或 1–10）、编码（UTF-8/GB18030）、Model 2、保留换行、兼容模式。
 4. **生成预览**：用 QRCoder 生成本地预览，显示二维码物理尺寸、模块数和 dots/模块。
-5. **打印**：后台线程通过 `winspool.drv` 的 RAW 接口提交，成功后状态栏显示作业号。
+5. **打印**：GP-9134T 通过 `winspool.drv` 的 RAW 接口提交 TSPL；虚拟打印机自动通过 GDI `PrintDocument` 渲染图片并生成 PDF/图片。
 6. **导出 TSPL**：保存原始 `.prn` 字节，便于无设备时检查或在目标机器上直接发送。
-7. **恢复默认**：恢复标签/二维码设置，保留当前打印机和上次导出目录。
+7. **导出 PNG**：保存当前二维码标签预览图，适合无设备时查看效果或发给别人确认。
+8. **恢复默认**：恢复标签/二维码设置，保留当前打印机和上次导出目录。
 
 快捷键：`Ctrl+P` 打印，`Ctrl+Enter` 生成预览。
 
@@ -119,12 +122,17 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 dist\QRTool.exe export hello scratch\hello.prn
 dist\QRTool.exe preview hello scratch\hello.png
 dist\QRTool.exe print hello "GP-9134T"
+dist\QRTool.exe print hello "Microsoft Print to PDF" scratch\hello.pdf
 ```
+
+- 真实打印机：`print` 走 RAW TSPL。
+- 虚拟打印机：`print` 走 GDI 图片渲染；第四个参数是可选输出路径（使用驱动的 `PrintToFile`，不弹保存框）。不传输出路径时会弹出驱动的保存对话框。
 
 - `export` 生成的 `hello` 为 **115 字节**，与上面的模板逐字节一致。
 - `preview` 生成的 PNG 用 `zxing-cpp` 解码：`hello` 解出 `hello`，`你好` 解出 `你好`。
 - GUI 已启动并截图检查布局；打印机枚举到 `Microsoft Print to PDF`。
 - `print` 对不存在的队列返回退出码 1，并在 `%APPDATA%\QRTool\qrtool.log` 写入 `Win32Exception`（`OpenPrinter` 错误路径）。
+- `print hello "Microsoft Print to PDF" hello.pdf` 生成 **2,237 字节、`%PDF-1.7`** 的有效 PDF；PDF 内嵌 **472×354** 标签图像，`zxing-cpp` 解码为 `hello`。
 - exe 是 `--windowed` 程序，headless 命令不输出到控制台；用退出码和生成的文件判断结果。错误日志在 `%APPDATA%\QRTool\qrtool.log`。
 
 ## 现场调试清单（有 GP-9134T 时）
@@ -170,6 +178,7 @@ dist/QRTool.exe            # 本地构建产物（.gitignore，不入库）
 
 - 需要 Windows 10/11 自带的 .NET Framework 4.8；更老的 Windows 需要单独安装。
 - 仅支持 x64 Windows；仅支持 Windows 打印队列，不做 IP:9100 直连。
+- 虚拟打印机（PDF/XPS/OneNote/Fax）走 GDI 栅格渲染，生成的是 PDF/图片，不是 TSPL；清晰度受驱动/页面影响。GP-9134T 仍走 TSPL，不受影响。
 - 一张标签只放一个二维码，不做批量排版；按需求只打印二维码，不打印人眼可读文字。
 - 本地预览使用与 TSPL 相同的 payload 和保守版本；最终 QR 的 model/mask/优化模式由打印机固件决定。
 - exe 未签名；headless 模式没有控制台输出。

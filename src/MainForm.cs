@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
@@ -40,6 +41,7 @@ namespace QRTool
         private Button btnPreview;
         private Button btnPrint;
         private Button btnExport;
+        private Button btnExportPng;
         private Button btnReset;
         private StatusStrip statusStrip;
         private ToolStripStatusLabel lblStatus;
@@ -158,14 +160,17 @@ namespace QRTool
             btnPrint = NewButton("打印");
             btnPrint.Font = new Font(Font.FontFamily, Font.Size, FontStyle.Bold);
             btnExport = NewButton("导出 TSPL");
+            btnExportPng = NewButton("导出 PNG");
             btnReset = NewButton("恢复默认");
             btnPreview.Click += delegate { UpdatePreview(true); };
             btnPrint.Click += delegate { OnPrint(); };
             btnExport.Click += delegate { OnExport(); };
+            btnExportPng.Click += delegate { OnExportPng(); };
             btnReset.Click += delegate { OnReset(); };
             actions.Controls.Add(btnPreview);
             actions.Controls.Add(btnPrint);
             actions.Controls.Add(btnExport);
+            actions.Controls.Add(btnExportPng);
             actions.Controls.Add(btnReset);
 
             textLayout.Controls.Add(txtText, 0, 0);
@@ -211,6 +216,7 @@ namespace QRTool
             btnTest.Margin = new Padding(0, 1, 0, 1);
             btnRefresh.Click += delegate { LoadPrinters(); };
             btnTest.Click += delegate { OnTestPrint(); };
+            cboPrinter.SelectedIndexChanged += delegate { UpdatePrinterHint(); };
             printerButtons.Controls.Add(btnRefresh);
             printerButtons.Controls.Add(btnTest);
             lblPrinterStatus = new Label();
@@ -439,6 +445,7 @@ namespace QRTool
                 btnTest.Enabled = !_busy;
                 lblPrinterStatus.Text = string.Format("已找到 {0} 台打印机", _printers.Count);
                 lblPrinterStatus.ForeColor = Color.FromArgb(98, 125, 152);
+                UpdatePrinterHint();
             }
             else
             {
@@ -584,6 +591,21 @@ namespace QRTool
                 MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
         }
 
+        private void UpdatePrinterHint()
+        {
+            if (_printers.Count == 0) return;
+            string printer = SelectedPrinter();
+            if (printer.Length == 0)
+            {
+                lblPrinterStatus.Text = "请选择打印机";
+                return;
+            }
+            if (PrinterService.IsVirtualPrinter(printer))
+                lblPrinterStatus.Text = "虚拟打印机：将使用图片渲染（生成 PDF/图片）";
+            else
+                lblPrinterStatus.Text = string.Format("已找到 {0} 台打印机", _printers.Count);
+        }
+
         private void OnPrint()
         {
             if (_busy) return;
@@ -600,7 +622,6 @@ namespace QRTool
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-
             try
             {
                 AppConfig cfg = ReadConfigFromUi();
@@ -608,7 +629,10 @@ namespace QRTool
                 BuiltLabel built = Tspl.Build(RequireText(), cfg);
                 if (!ConfirmWarnings(built, "打印")) return;
                 _cfg = cfg;
-                Submit(printer, built, "print");
+                if (PrinterService.IsVirtualPrinter(printer))
+                    SubmitRendered(printer, built, cfg, "print");
+                else
+                    Submit(printer, built, "print");
             }
             catch (Exception ex)
             {
@@ -633,7 +657,6 @@ namespace QRTool
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-
             try
             {
                 AppConfig cfg = ReadConfigFromUi();
@@ -646,7 +669,10 @@ namespace QRTool
                         "测试打印", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                     return;
                 _cfg = cfg;
-                Submit(printer, built, "test");
+                if (PrinterService.IsVirtualPrinter(printer))
+                    SubmitRendered(printer, built, cfg, "test");
+                else
+                    Submit(printer, built, "test");
             }
             catch (Exception ex)
             {
@@ -687,6 +713,40 @@ namespace QRTool
             }
         }
 
+        private void OnExportPng()
+        {
+            try
+            {
+                AppConfig cfg = ReadConfigFromUi();
+                BuiltLabel built = Tspl.Build(RequireText(), cfg);
+
+                SaveFileDialog dialog = new SaveFileDialog();
+                dialog.Title = "导出二维码预览图";
+                dialog.Filter = "PNG 图片 (*.png)|*.png|所有文件 (*.*)|*.*";
+                dialog.DefaultExt = "png";
+                dialog.AddExtension = true;
+                dialog.FileName = "QR_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
+                if (!string.IsNullOrEmpty(cfg.last_export_dir))
+                    dialog.InitialDirectory = cfg.last_export_dir;
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                using (Bitmap image = QrPreview.Render(built, cfg))
+                {
+                    image.Save(dialog.FileName, ImageFormat.Png);
+                }
+                string dir = Path.GetDirectoryName(dialog.FileName);
+                if (!string.IsNullOrEmpty(dir)) cfg.last_export_dir = dir;
+                _cfg = cfg;
+                PersistConfig();
+                SetStatus("已导出预览图 " + dialog.FileName);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "无法导出预览图",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void OnReset()
         {
             if (_busy) return;
@@ -704,6 +764,42 @@ namespace QRTool
             UpdatePreview(false);
             PersistConfig();
             SetStatus("已恢复默认设置");
+        }
+
+        private void SubmitRendered(
+            string printer, BuiltLabel built, AppConfig cfg, string action)
+        {
+            _busy = true;
+            _previewTimer.Stop();
+            SetBusy(true);
+            SetStatus(string.Format("正在渲染到虚拟打印机“{0}”…", printer));
+            try
+            {
+                using (Bitmap image = QrPreview.Render(built, cfg))
+                {
+                    PrinterService.PrintRendered(printer, image, built.Layout, null);
+                }
+                SetStatus(string.Format(
+                    "已提交到虚拟打印机“{0}”；请在驱动窗口中保存 PDF/图片", printer));
+                PersistConfig();
+                if (action == "test")
+                {
+                    MessageBox.Show(this,
+                        string.Format("已提交到虚拟打印机“{0}”。\n请在驱动窗口中保存文件。", printer),
+                        "测试打印", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                SetStatus("打印失败");
+                MessageBox.Show(this, "无法提交到虚拟打印机：\n" + ex.Message,
+                    "打印失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _busy = false;
+                SetBusy(false);
+            }
         }
 
         private void Submit(string printer, BuiltLabel built, string action)
@@ -772,6 +868,7 @@ namespace QRTool
             btnPreview.Enabled = !busy;
             btnPrint.Enabled = !busy && hasPrinters;
             btnExport.Enabled = !busy;
+            btnExportPng.Enabled = !busy;
             btnRefresh.Enabled = !busy;
             btnTest.Enabled = !busy && hasPrinters;
             btnReset.Enabled = !busy;
